@@ -14,10 +14,10 @@
   };
   const DOMAIN_HELP = {
     healthy: "Every tested target answered within its thresholds.",
-    "provider-edge": "The provider handoff and independent internet targets failed together while the local " +
-      "access and gateway were fine. This is the strongest sign of a provider-side flap to raise with Vision.",
-    upstream: "Independent internet targets failed but the provider handoff answered: beyond the handoff " +
-      "(transit, peering or the destinations themselves).",
+    "provider-edge": "Provider and internet targets showed problems in the same minute. " +
+      "Check whether the local gateway also passed in the same cycles before attributing this to Vision.",
+    upstream: "Internet targets showed problems without a matching provider failure in that minute. " +
+      "The handoff may not have been tested; check the individual results.",
     "provider-only": "Only the provider handoff target failed; internet targets still worked. Possibly filtering " +
       "or control-plane load on the handoff device rather than a forwarding outage.",
     dns: "Only DNS failed while TCP/HTTP to IP addresses worked: a resolver problem, not a link flap.",
@@ -86,6 +86,7 @@
   } catch (error) {
     document.getElementById("subtitle").textContent = "No published data yet. Run vision-watch publish-push.";
     document.getElementById("live-text").textContent = "No data";
+    empty(document.getElementById("heartbeat"), "Diagnostic feed unavailable.");
     return;
   }
 
@@ -96,19 +97,22 @@
 
   const documents = await Promise.all((index.days || []).map((day) =>
     getJSON(`data/days/${day}.json`).catch(() => null)));
-  const rows = [];
+  const rows = [], diagnostics = [];
   for (const doc of documents) {
     if (!doc) continue;
+    for (const [minute, health] of Object.entries(doc.diagnostics || {})) {
+      diagnostics.push({ ...health, t: (doc.t0 + Number(minute) * doc.step) * 1000 });
+    }
     for (let i = 0; i < 1440; i += 1) {
       const access = doc.access || {};
-      const hasTarget = targets.some((t) => (doc.targets[t.id]?.s[i] || 0) > 0);
+      const hasTarget = targets.some((t) => (doc.targets?.[t.id]?.s[i] || 0) > 0);
       if (!hasTarget && !(access.s?.[i] > 0) && doc.domain?.[i] == null) continue;
       const row = {
         t: (doc.t0 + i * doc.step) * 1000, a: access.s?.[i] || 0, p: access.p?.[i] || 0,
         r: access.r?.[i] ?? null, d: domainName(doc.domain?.[i]), s: {}, l: {}, x: {}, c: {},
       };
       for (const target of targets) {
-        const series = doc.targets[target.id];
+        const series = doc.targets?.[target.id];
         if (!series) continue;
         row.s[target.id] = series.s[i] || 0;
         row.l[target.id] = series.l[i] ?? null;
@@ -119,6 +123,7 @@
     }
   }
   rows.sort((a, b) => a.t - b.t);
+  diagnostics.sort((a, b) => a.t - b.t);
 
   const generated = index.generated_at * 1000;
   document.getElementById("title").textContent = index.label || "Network metrics";
@@ -137,9 +142,9 @@
     live.className = "status-pill warn";
     liveText.textContent = `Feed stale · ${ago(generated)}`;
   } else {
-    const domain = latest.d || "healthy";
+    const domain = latest.d;
     live.className = `status-pill ${domain === "healthy" ? "ok" : PROVIDER_DOMAINS.includes(domain) || domain === "access" ? "bad" : "warn"}`;
-    liveText.textContent = domain === "healthy" ? "All clear" : `Now: ${domain}`;
+    liveText.textContent = !domain ? "No fault-domain observation" : domain === "healthy" ? "Latest probes OK" : `Latest lead: ${domain}`;
   }
 
   const legend = document.getElementById("legend");
@@ -161,11 +166,13 @@
     for (const id of ["timeline", "latency", "flaps", "domains", "heatmap", "access", "incident-durations"]) {
       empty(document.getElementById(id), "No data published yet.");
     }
+    const bounds = diagnostics.length ? [diagnostics[0].t, diagnostics.at(-1).t + 60000] : null;
+    monitorHealth(bounds);
     return;
   }
 
-  const dataStart = rows[0].t;
-  const dataEnd = rows[rows.length - 1].t + 60000;
+  const dataStart = Math.min(rows[0].t, diagnostics[0]?.t ?? Infinity);
+  const dataEnd = Math.max(rows.at(-1).t, diagnostics.at(-1)?.t ?? -Infinity) + 60000;
   let view = [Math.max(dataStart, dataEnd - 24 * 3600 * 1000), dataEnd];
 
   function rowsIn([start, end]) {
@@ -578,7 +585,64 @@
     domains();
     heatmap();
     access();
+    monitorHealth(view);
     incidents();
+  }
+
+  function monitorHealth(range) {
+    const heartbeat = document.getElementById("heartbeat");
+    const events = document.getElementById("diagnostic-events");
+    if (index.diagnostics !== true || !range) {
+      empty(heartbeat, index.diagnostics === true ? "No diagnostic records published." : "Diagnostic metrics not enabled in this feed.");
+      events.replaceChildren();
+      return;
+    }
+    const selected = diagnostics.filter((m) => m.t >= range[0] && m.t < range[1]);
+    const time = d3.utcFormat("%Y-%m-%d %H:%M UTC");
+    const style = { background: "transparent", color: "#8f9bb8" };
+    const x = { type: "utc", domain: range.map((t) => new Date(t)), label: "UTC" };
+    const cycles = selected.filter((m) => m.cycles > 0);
+    if (!cycles.length) {
+      empty(heartbeat, "No completed cycles recorded in this range.");
+    } else {
+      heartbeat.replaceChildren(Plot.plot({
+        width: width(heartbeat), height: 155, style, x, marginLeft: 55,
+        y: { label: "Cycles / min", grid: true, tickFormat: (n) => Number.isInteger(n) ? n : "" },
+        marks: [Plot.rectY(cycles, {
+          x1: (m) => Math.max(range[0], m.t), x2: (m) => Math.min(range[1], m.t + 60000),
+          y: "cycles", fill: "#48a9ff",
+          title: (m) => `${time(new Date(m.t))}\n${m.cycles} completed cycle(s) · slowest ${m.max_cycle_ms ?? 0} ms`,
+        })],
+      }));
+    }
+
+    const lanes = [
+      ["Cycle resumed after gap", (m) => m.gap_minutes, " min since previous cycle start", "#ffcc4d"],
+      ["Monitor started", (m) => m.starts, "", "#2fd08a"],
+      ["Monitor stopped", (m) => m.stops, "", "#6a86ac"],
+      ["Access path changed", (m) => m.path_changes, "", "#3d8bfd"],
+      ["Wi-Fi roamed", (m) => m.roams, "", "#a855f7"],
+      ["Route snapshot changed", (m) => m.route_changes, "", "#00cec9"],
+      ["Diagnostic command failed", (m) => m.diagnostic_errors, "", "#ff9f43"],
+      ["Probe error", (m) => m.probe_errors, "", "#ff5d6c"],
+      ["Carrier changes", (m) => m.link?.carrier_changes, "", "#b39ddb"],
+      ["Interface errors", (m) => m.link?.interface_errors, "", "#ff9f43"],
+      ["CRC errors (subset)", (m) => m.link?.crc_errors, "", "#e5894a"],
+      ["Interface discards", (m) => m.link?.discards, "", "#ffcc4d"],
+    ];
+    const marks = lanes.flatMap(([lane, count, unit, color]) => selected
+      .filter((m) => count(m) > 0)
+      .map((m) => ({ lane, color, t: m.t, title: `${time(new Date(m.t))}\n${lane}: ${count(m)}${unit}` })));
+    if (!marks.length) {
+      empty(events, "No diagnostic events recorded in this range. Unsupported interface counters are not shown.");
+      return;
+    }
+    const shown = lanes.map(([lane]) => lane).filter((lane) => marks.some((m) => m.lane === lane));
+    events.replaceChildren(Plot.plot({
+      width: width(events), height: 55 + shown.length * 24, style, x, marginLeft: 175,
+      y: { domain: shown, label: null, grid: true },
+      marks: [Plot.dot(marks, { x: "t", y: "lane", fill: "color", title: "title", r: 4 })],
+    }));
   }
 
   function render() {

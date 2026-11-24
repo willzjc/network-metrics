@@ -30,8 +30,8 @@
 
   <section class="card">
     <h2>Fault-domain timeline</h2>
-    <p class="explain">Each column is the worst minute in that slice. <b>Fault domain</b> classifies where a
-      failure sits, using which layers failed together. Use it to tell a Vision flap from a local problem.</p>
+    <p class="explain">Each column is the worst observation in that slice. <b>Fault domain</b> is a lead, not proof:
+      different probes can run at different times within a minute, and absent checks do not imply success.</p>
     <div id="legend" class="legend"></div>
     <div id="timeline" class="chart"></div>
     <div id="overview" class="chart overview"></div>
@@ -52,7 +52,7 @@
     </section>
     <section class="card">
       <h2>Fault-domain share</h2>
-      <p class="explain">Minutes with a problem in the selected range, by where the problem was.</p>
+      <p class="explain">Minutes with a problem in the selected range, grouped by suspected fault domain.</p>
       <div id="domains" class="chart"></div>
     </section>
   </div>
@@ -73,9 +73,19 @@
   </div>
 
   <section class="card">
+    <h2>Monitor heartbeat and diagnostic events</h2>
+    <p class="explain">Completed cycles and local events in UTC. A blank heartbeat is not an outage.
+      Gaps are shown at the next completed cycle; restarts and path changes can help explain them.
+      Route changes are detected at snapshots, not at the exact moment a route changes.</p>
+    <div id="heartbeat" class="chart"></div>
+    <div id="diagnostic-events" class="chart"></div>
+    <p class="explain">These are monitor-side observations. Router, session and optical telemetry are not collected by this feed.</p>
+  </section>
+
+  <section class="card">
     <h2>Incidents</h2>
-    <p class="explain">Confirmed incidents (two consecutive bad cycles) overlapping the selected range. Bars that line
-      up across several targets indicate one shared event, typically a flap upstream of all of them.</p>
+    <p class="explain">Confirmed incidents overlapping the selected range. Bars that line up across several targets
+      can indicate a shared event; check the monitor heartbeat and independent edge evidence before attributing it.</p>
     <div id="incident-durations" class="chart"></div>
     <div class="table-wrap"><table id="incidents"></table></div>
   </section>

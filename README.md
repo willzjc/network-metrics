@@ -15,13 +15,18 @@ Published, allowlisted fields only:
 - target labels, scopes and thresholds
 - per-minute worst status, mean/max latency, failed-attempt rate and flap counts
 - the local access path (wired / Wi-Fi / none) and Wi-Fi RSSI
-- a per-minute fault domain
+- a per-minute suspected fault domain
 - incident start/duration, KPIs and generation time
+- opt-in diagnostic counts by UTC minute: completed cycles, longest cycle,
+  gaps marked at the next completed cycle, monitor starts/stops, route snapshot
+  changes, diagnostic/probe errors, access path changes, Wi-Fi roams, and observed
+  interface-counter increases. No recorded increase does not mean the interface
+  supports the counter.
 
 Never published:
 - IP addresses, MAC addresses or Wi-Fi network names
 - access point IDs (BSSIDs), which can geolocate a router
-- hostnames, routes or raw diagnostics
+- hostnames, route tables, command arguments/output, or raw event messages
 
 The publisher blocks a publish if anything resembling an IP, a MAC or a configured
 private string appears. The check runs again before every commit.
@@ -30,15 +35,16 @@ private string appears. The check runs again before every commit.
 
 | Domain | Meaning |
 |---|---|
-| `provider-edge` | Provider handoff and independent internet targets failed together while the local link and gateway were fine. This is the strongest provider-side signal. |
-| `upstream` | Internet targets failed while the handoff answered. The fault is beyond the handoff. |
+| `provider-edge` | Provider and internet targets recorded problems in the same minute. Verify that local checks passed in the same cycles. |
+| `upstream` | Internet targets recorded problems without a matching provider-target failure. The handoff might not have been tested. |
 | `provider-only` | Only the handoff target failed. |
 | `dns` | Only DNS failed. |
 | `local` | The local gateway/CPE failed. |
 | `access`, `access-degraded` | The monitor's own connection was missing or weak. Never blamed upstream. |
 
-One vantage point cannot prove which operator caused a fault. Correlate these
-times with the provider's own counters and events.
+One vantage point cannot prove which operator caused a fault. A heartbeat gap
+is missing evidence, not downtime. Correlate the UTC timeline with a second
+monitor at the ISP edge and with the provider's WAN counters and session events.
 
 ## How data gets here
 
