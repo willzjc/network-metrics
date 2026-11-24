@@ -7,7 +7,13 @@ The page is static. Data in [`data/`](data/) is published by
 [vision-watch](https://github.com/willzjc/network-metrics#how-data-gets-here):
 - a monitor that measures TCP, DNS and HTTPS (no ping)
 - wired-first, with an allowed-Wi-Fi fallback
+- collects and publishes only on the home network (recognised by the home router), so
+  mobile, office or other networks never contaminate the data
 - aggregates measurements into minute buckets before publishing
+
+Grey bands in the heartbeat mean monitoring was paused (away from home, offline or router
+not recognised): nothing was measured, which is not an outage. Outages measured while at
+home show as failures in the charts.
 
 ## What is published, and what is not
 
@@ -19,7 +25,8 @@ Published, allowlisted fields only:
 - incident start/duration, KPIs and generation time
 - opt-in diagnostic counts by UTC minute: completed cycles, longest cycle,
   gaps marked at the next completed cycle, monitor starts/stops, route snapshot
-  changes, diagnostic/probe errors, access path changes, Wi-Fi roams, and observed
+  changes, diagnostic/probe errors, access path changes, Wi-Fi roams, monitoring
+  pause/resume counts (never the reason or location), and observed
   interface-counter increases. No recorded increase does not mean the interface
   supports the counter.
 

@@ -136,11 +136,17 @@
   const live = document.getElementById("live");
   const liveText = document.getElementById("live-text");
   const latest = rows[rows.length - 1];
-  if (!latest) {
+  const lastPause = pausedSpans().at(-1);
+  if (lastPause?.ongoing) {
+    live.className = "status-pill warn";
+    liveText.textContent = `Monitoring paused · ${ago(lastPause[0])} · not on the home network or offline`;
+  } else if (!latest) {
     liveText.textContent = "No data";
   } else if (Date.now() - generated > 30 * 60 * 1000) {
     live.className = "status-pill warn";
-    liveText.textContent = `Feed stale · ${ago(generated)}`;
+    liveText.textContent = `Feed stale · ${ago(generated)} · publishes only from the home network`;
+    live.title = "The monitor only measures and pushes while on the home network. A stale feed usually means the " +
+      "laptop is away, asleep or offline. Measurements taken at home during an outage are pushed once it ends.";
   } else {
     const domain = latest.d;
     live.className = `status-pill ${domain === "healthy" ? "ok" : PROVIDER_DOMAINS.includes(domain) || domain === "access" ? "bad" : "warn"}`;
@@ -589,6 +595,28 @@
     incidents();
   }
 
+  // Spans from a published pause to the next resume or completed cycle; an ongoing span ends at feed time.
+  function pausedSpans() {
+    const spans = [];
+    let start = null;
+    for (const m of diagnostics) {
+      if (start !== null && m.t > start && (m.resumes > 0 || m.cycles > 0)) {
+        spans.push([start, m.t]);
+        start = null;
+      }
+      if (start === null && m.pauses > 0) {
+        if (m.resumes >= m.pauses || m.cycles > 0 && m.resumes > 0) spans.push([m.t, m.t + 60000]);
+        else start = m.t;
+      }
+    }
+    if (start !== null) {
+      const span = [start, Math.max(start + 60000, index.generated_at * 1000)];
+      span.ongoing = true;
+      spans.push(span);
+    }
+    return spans;
+  }
+
   function monitorHealth(range) {
     const heartbeat = document.getElementById("heartbeat");
     const events = document.getElementById("diagnostic-events");
@@ -602,21 +630,35 @@
     const style = { background: "transparent", color: "#8f9bb8" };
     const x = { type: "utc", domain: range.map((t) => new Date(t)), label: "UTC" };
     const cycles = selected.filter((m) => m.cycles > 0);
-    if (!cycles.length) {
+    const paused = pausedSpans()
+      .map(([start, end]) => [Math.max(range[0], start), Math.min(range[1], end)])
+      .filter(([start, end]) => end > start);
+    if (!cycles.length && !paused.length) {
       empty(heartbeat, "No completed cycles recorded in this range.");
     } else {
       heartbeat.replaceChildren(Plot.plot({
         width: width(heartbeat), height: 155, style, x, marginLeft: 55,
-        y: { label: "Cycles / min", grid: true, tickFormat: (n) => Number.isInteger(n) ? n : "" },
-        marks: [Plot.rectY(cycles, {
-          x1: (m) => Math.max(range[0], m.t), x2: (m) => Math.min(range[1], m.t + 60000),
-          y: "cycles", fill: "#48a9ff",
-          title: (m) => `${time(new Date(m.t))}\n${m.cycles} completed cycle(s) · slowest ${m.max_cycle_ms ?? 0} ms`,
-        })],
+        y: { label: "Cycles / min", grid: true, domain: [0, Math.max(1, d3.max(cycles, (m) => m.cycles) ?? 1)],
+          tickFormat: (n) => Number.isInteger(n) ? n : "" },
+        marks: [
+          Plot.rectY(paused, {
+            x1: (s) => s[0], x2: (s) => s[1], y: Math.max(1, d3.max(cycles, (m) => m.cycles) ?? 1),
+            fill: "#8f9bb8", fillOpacity: 0.22,
+            title: (s) => `Monitoring paused ${time(new Date(s[0]))} → ${time(new Date(s[1]))}\n` +
+              "Not on the home network, offline, or router not recognised. Nothing was measured: not an outage.",
+          }),
+          Plot.rectY(cycles, {
+            x1: (m) => Math.max(range[0], m.t), x2: (m) => Math.min(range[1], m.t + 60000),
+            y: "cycles", fill: "#48a9ff",
+            title: (m) => `${time(new Date(m.t))}\n${m.cycles} completed cycle(s) · slowest ${m.max_cycle_ms ?? 0} ms`,
+          }),
+        ],
       }));
     }
 
     const lanes = [
+      ["Monitoring paused", (m) => m.pauses, " (off home network, offline, or router not recognised)", "#8f9bb8"],
+      ["Monitoring resumed", (m) => m.resumes, " (home network confirmed)", "#2fd08a"],
       ["Cycle resumed after gap", (m) => m.gap_minutes, " min since previous cycle start", "#ffcc4d"],
       ["Monitor started", (m) => m.starts, "", "#2fd08a"],
       ["Monitor stopped", (m) => m.stops, "", "#6a86ac"],
